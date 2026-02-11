@@ -1,0 +1,41 @@
+# .bazelrc
+
+# ==================== 通用配置 ====================
+build --cxxopt=-std=c++17
+build --host_cxxopt=-std=c++17
+build --color=yes
+build --show_timestamps
+
+# ==================== 优化级别 ====================
+build:opt --compilation_mode=opt
+build:opt --copt=-O3
+build:opt --copt=-march=native
+build:opt --copt=-DNDEBUG
+
+build:debug --compilation_mode=dbg
+build:debug --copt=-g
+build:debug --strip=never
+
+# ==================== CUDA 配置 ====================
+build:cuda --@rules_cuda//cuda:enable=true
+build:cuda --@rules_cuda//cuda:compiler=nvcc
+
+# CUDA 架构
+build:cuda --@rules_cuda//cuda:archs=sm_75,sm_80,sm_86,sm_89
+
+# CUDA 优化
+build:cuda --cuda_opt=-O3
+build:cuda --cuda_opt=--use_fast_math
+build:cuda --cuda_opt=--expt-relaxed-constexpr
+
+# ==================== Python 配置 ====================
+build --python_path=/usr/bin/python3
+
+# ==================== 测试配置 ====================
+test --test_output=errors
+test --test_verbose_timeout_warnings
+test --cache_test_results=auto
+
+# ==================== 远程缓存（可选）====================
+# build --remote_cache=grpc://your-cache-server:9092
+# build --remote_upload_local_results=true
