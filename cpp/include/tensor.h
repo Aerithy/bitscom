@@ -1,5 +1,6 @@
 #pragma once
 #include <vector>
+#include <cstdint>
 #include <cuda_runtime.h>
 
 namespace bitscom {

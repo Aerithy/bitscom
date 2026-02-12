@@ -1,41 +1,23 @@
-# .bazelrc
+# # CUDA 编译配置
+# build --cxxopt=-std=c++17
+# build --host_cxxopt=-std=c++17
 
-# ==================== 通用配置 ====================
-build --cxxopt=-std=c++17
-build --host_cxxopt=-std=c++17
-build --color=yes
-build --show_timestamps
+# # CUDA 架构设置（根据您的 GPU 调整）
+# build --cuda_archs=sm_75,sm_80,sm_86
 
-# ==================== 优化级别 ====================
-build:opt --compilation_mode=opt
-build:opt --copt=-O3
-build:opt --copt=-march=native
-build:opt --copt=-DNDEBUG
+# # 优化设置
+# build:opt --compilation_mode=opt
+# build:opt --copt=-O3
 
-build:debug --compilation_mode=dbg
-build:debug --copt=-g
-build:debug --strip=never
+# # 调试设置
+# build:dbg --compilation_mode=dbg
+# build:dbg --copt=-g
 
-# ==================== CUDA 配置 ====================
-build:cuda --@rules_cuda//cuda:enable=true
-build:cuda --@rules_cuda//cuda:compiler=nvcc
+# # GPU 设备设置
+# build --action_env=CUDA_VISIBLE_DEVICES=0
 
-# CUDA 架构
-build:cuda --@rules_cuda//cuda:archs=sm_75,sm_80,sm_86,sm_89
-
-# CUDA 优化
-build:cuda --cuda_opt=-O3
-build:cuda --cuda_opt=--use_fast_math
-build:cuda --cuda_opt=--expt-relaxed-constexpr
-
-# ==================== Python 配置 ====================
-build --python_path=/usr/bin/python3
-
-# ==================== 测试配置 ====================
-test --test_output=errors
-test --test_verbose_timeout_warnings
-test --cache_test_results=auto
-
-# ==================== 远程缓存（可选）====================
-# build --remote_cache=grpc://your-cache-server:9092
-# build --remote_upload_local_results=true
+# 在 .bazelrc 中
+build --action_env=CUDA_HOME=/usr/local/cuda
+build --action_env=LD_LIBRARY_PATH=/usr/local/cuda/lib64
+# build --experimental_repository_resolved_file=
+# build --experimental_check_external_repository_files=false

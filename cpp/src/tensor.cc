@@ -1,4 +1,6 @@
 // cpp/src/tensor.cc
+#include <cstdlib>
+#include <cassert>
 #include "cpp/include/tensor.h"
 // #include "cuda/include/kernels.cuh"
 // #include <cuda_runtime.h>
@@ -32,13 +34,13 @@ Tensor Tensor::matmul(const Tensor& other) const {
     
     if (device_ == Device::CUDA) {
         // 调用 CUDA kernel
-        cuda::matmul(
-            static_cast<const float*>(data_),
-            static_cast<const float*>(other.data_),
-            static_cast<float*>(result.data_),
-            M, N, K,
-            nullptr  // default stream
-        );
+        // cuda::matmul(
+        //     static_cast<const float*>(data_),
+        //     static_cast<const float*>(other.data_),
+        //     static_cast<float*>(result.data_),
+        //     M, N, K,
+        //     nullptr  // default stream
+        // );
         cudaDeviceSynchronize();
     } else {
         // CPU 实现 (使用 Eigen)
