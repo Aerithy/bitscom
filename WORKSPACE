@@ -83,6 +83,38 @@ new_local_repository(
 )
 
 # ========================================
+# Third-party dependencies
+# ========================================
+
+# Pytorch 源码（仅供参考/阅读）
+local_repository(
+    name = "local_pytorch",
+    path = "third_party/pytorch",
+)
+
+# libtorch: 使用 pip 安装的 PyTorch 的预编译头文件和库
+# 路径通过: python3 -c "import torch; print(torch.__path__[0])"
+new_local_repository(
+    name = "local_libtorch",
+    path = "/home/aerith/anaconda3/lib/python3.12/site-packages/torch",
+    build_file = "@//:libtorch.BUILD",
+)
+
+# Python headers
+new_local_repository(
+    name = "local_python",
+    path = "/home/aerith/anaconda3/include/python3.12",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+cc_library(
+    name = "python_headers",
+    hdrs = glob(["**/*.h"]),
+    includes = ["."],
+)
+""",
+)
+
+# ========================================
 # 常见的 C++ 依赖库示例
 # ========================================
 
