@@ -82,6 +82,26 @@ new_local_repository(
 # """,
 )
 
+# NCCL: 使用本地 submodule 源码目录 third_party/nccl
+new_local_repository(
+    name = "local_nccl",
+    path = "third_party/nccl",
+    build_file_content = """
+package(default_visibility = ["//visibility:public"])
+
+cc_library(
+    name = "nccl",
+    hdrs = glob([
+        "src/include/*.h",
+        "src/include/**/*.h",
+    ]),
+    includes = ["src/include"],
+    # 这里先只暴露头文件；如果后续你要链接 libnccl.so，
+    # 可以再把预编译产物通过 srcs 加进来。
+)
+""",
+)
+
 # ========================================
 # Third-party dependencies
 # ========================================

@@ -19,6 +19,7 @@ cc_library(
     deps = [
         "@local_cuda//:cudart",
         "@local_libtorch//:torch",
+        "@local_nccl//:nccl",
     ],
     copts = [
         "-std=c++17",
