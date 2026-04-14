@@ -13,6 +13,7 @@ import os
 import shutil
 import site
 import sysconfig
+import json
 
 from setuptools import setup, find_packages
 import torch
@@ -134,6 +135,61 @@ def _has_nvcc():
     return os.path.exists(os.path.join(cuda_home, "bin", "nvcc"))
 
 
+class BuildExtensionWithCompileCommands(BuildExtension):
+    """BuildExtension that emits compile_commands.json for clangd."""
+
+    def build_extensions(self):
+        compiler = getattr(self, "compiler", None)
+        spawn = getattr(compiler, "spawn", None)
+        if compiler is None or spawn is None:
+            super().build_extensions()
+            return
+
+        records = []
+        project_root = os.path.abspath(os.path.dirname(__file__))
+
+        def recording_spawn(cmd):
+            try:
+                # distutils typically uses: <compiler> ... -c <src> -o <obj>
+                if "-c" in cmd:
+                    src = cmd[cmd.index("-c") + 1]
+                elif "--compile" in cmd:
+                    # nvcc may use --compile <src>
+                    src = cmd[cmd.index("--compile") + 1]
+                else:
+                    src = None
+
+                if src and src.endswith((".c", ".cc", ".cpp", ".cxx", ".cu")):
+                    src_abs = os.path.abspath(src)
+                    records.append(
+                        {
+                            "directory": project_root,
+                            "file": src_abs,
+                            # Use argv-style records to avoid shell-quoting ambiguity,
+                            # which is especially important for nvcc options.
+                            "arguments": [str(p) for p in cmd],
+                        }
+                    )
+            except Exception:
+                # Never block compilation because of compile db recording.
+                pass
+
+            return spawn(cmd)
+
+        compiler.spawn = recording_spawn
+        try:
+            super().build_extensions()
+        finally:
+            compiler.spawn = spawn
+
+        if records:
+            # Keep last command for each source file to avoid noisy duplicates.
+            by_file = {entry["file"]: entry for entry in records}
+            output = os.path.join(project_root, "compile_commands.json")
+            with open(output, "w", encoding="utf-8") as f:
+                json.dump(list(by_file.values()), f, indent=2)
+
+
 ext_modules = [
     CppExtension(
         name="bitscom._lowbit_c",
@@ -183,7 +239,7 @@ setup(
     package_dir={"": "python"},
     packages=find_packages(where="python"),
     ext_modules=ext_modules,
-    cmdclass={"build_ext": BuildExtension},
+    cmdclass={"build_ext": BuildExtensionWithCompileCommands},
     python_requires=">=3.8",
     install_requires=[
         "torch>=2.0",
