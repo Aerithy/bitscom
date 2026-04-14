@@ -18,8 +18,11 @@ c10::intrusive_ptr<c10d::Backend> createBackend(
     const c10::intrusive_ptr<c10d::Store>& store,
     int rank,
     int size,
-    const std::chrono::milliseconds& timeout) {
-    return bitscom::createProcessGroupLowBit(store, rank, size, timeout);
+    const std::chrono::milliseconds& timeout,
+    int bitwidth,
+    bool error_feedback) {
+    return bitscom::createProcessGroupLowBit(
+        store, rank, size, timeout, bitwidth, error_feedback);
 }
 
 PYBIND11_MODULE(_lowbit_c, m) {
@@ -54,5 +57,7 @@ PYBIND11_MODULE(_lowbit_c, m) {
           py::arg("store"),
           py::arg("rank"),
           py::arg("size"),
-          py::arg("timeout") = std::chrono::milliseconds(600000));
+            py::arg("timeout") = std::chrono::milliseconds(600000),
+            py::arg("bitwidth") = 4,
+            py::arg("error_feedback") = false);
 }

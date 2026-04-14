@@ -6,13 +6,20 @@
 """
 
 import os
+import pytest
 import torch
 import torch.distributed as dist
 import bitscom
 
 
+pytestmark = pytest.mark.integration
+
+
 def test_all_reduce():
     """测试 all_reduce 基本正确性。"""
+    if not dist.is_initialized():
+        pytest.skip("distributed process group is not initialized")
+
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     device = torch.device(f"cuda:{rank}")
@@ -35,6 +42,9 @@ def test_all_reduce():
 
 def test_broadcast():
     """测试 broadcast 基本正确性。"""
+    if not dist.is_initialized():
+        pytest.skip("distributed process group is not initialized")
+
     rank = dist.get_rank()
     device = torch.device(f"cuda:{rank}")
 

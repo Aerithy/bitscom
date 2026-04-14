@@ -116,14 +116,16 @@ local_repository(
 # 路径通过: python3 -c "import torch; print(torch.__path__[0])"
 new_local_repository(
     name = "local_libtorch",
-    path = "/home/aerith/anaconda3/lib/python3.12/site-packages/torch",
+    # path = "/home/aerith/anaconda3/lib/python3.12/site-packages/torch",
+    path = "/home/aerith/miniforge3/lib/python3.12/site-packages/torch",
     build_file = "@//:libtorch.BUILD",
 )
 
 # Python headers
 new_local_repository(
     name = "local_python",
-    path = "/home/aerith/anaconda3/include/python3.12",
+    # path = "/home/aerith/anaconda3/include/python3.12",
+    path = "/home/aerith/miniforge3/include/python3.12",
     build_file_content = """
 package(default_visibility = ["//visibility:public"])
 cc_library(

@@ -8,8 +8,11 @@
 
 #include <chrono>
 #include <functional>
+#include <mutex>
 #include <memory>
 #include <string>
+#include <tuple>
+#include <unordered_map>
 #include <vector>
 
 namespace bitscom {
@@ -25,7 +28,7 @@ class WorkLowBit : public c10d::Work {
 public:
     WorkLowBit(
         c10::intrusive_ptr<c10d::Work> nccl_work,
-        std::function<void()> post_hook = nullptr);
+        std::function<bool()> post_hook = nullptr);
 
     bool isCompleted() override;
     bool isSuccess() const override;
@@ -33,8 +36,12 @@ public:
     c10::intrusive_ptr<c10::ivalue::Future> getFuture() override;
 
 private:
+    bool runPostHook();
+
     c10::intrusive_ptr<c10d::Work> nccl_work_;
-    std::function<void()> post_hook_;
+    std::function<bool()> post_hook_;
+    bool post_hook_ran_ = false;
+    bool post_hook_success_ = true;
 };
 
 // ProcessGroupLowBit: 继承 c10d::Backend
@@ -82,10 +89,24 @@ private:
     LowBitOptions options_;
 
     // ---- pack/unpack 占位 ----
-    // 将 float tensor 量化 + 打包为 uint8 buffer
-    at::Tensor pack(const at::Tensor& input);
+    // 将 float tensor 量化 + 打包为 uint8 buffer，返回 (packed, scale)
+    std::tuple<at::Tensor, at::Tensor> pack(const at::Tensor& input);
     // 将 uint8 buffer 解包 + 反量化为 float tensor
-    void unpack(const at::Tensor& packed, at::Tensor& output);
+    at::Tensor unpack(
+        const at::Tensor& packed,
+        int64_t numel,
+        const at::Tensor& scale,
+        c10::Device device,
+        at::ScalarType out_dtype);
+
+    bool shouldUseLowBitAllreduce(const c10d::AllreduceOptions& opts) const;
+    c10::intrusive_ptr<c10d::Work> allreduceLowBit(
+        std::vector<at::Tensor>& tensors,
+        const c10d::AllreduceOptions& opts);
+
+      // Error-feedback residual cache (keyed by TensorImpl address).
+      std::mutex residual_mutex_;
+      std::unordered_map<int64_t, at::Tensor> residual_cache_;
 };
 
 // 工厂函数，用于 Python 侧 register_backend
@@ -93,6 +114,8 @@ c10::intrusive_ptr<c10d::Backend> createProcessGroupLowBit(
     const c10::intrusive_ptr<c10d::Store>& store,
     int rank,
     int size,
-    const std::chrono::milliseconds& timeout);
+      const std::chrono::milliseconds& timeout,
+      int bitwidth,
+      bool error_feedback);
 
 }  // namespace bitscom
