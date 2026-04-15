@@ -160,5 +160,38 @@ def test_lowbit_allreduce_requires_divisible_numel(fake_dist, monkeypatch):
     group = LowBitGroup(bitwidth=4, process_group=object())
     t = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float32)
 
-    with pytest.raises(ValueError, match="divisible"):
-        group.all_reduce(t, async_op=False)
+    group.all_reduce(t, async_op=False)
+    assert t.shape == (3,)
+
+
+def test_all_reduce_uses_pipeline_a_when_local_and_inter_groups_passed(fake_dist, monkeypatch):
+    monkeypatch.setattr("bitscom.api.dist.get_world_size", lambda group: 2)
+
+    called = {"count": 0, "chunk_size": None}
+
+    def fake_pipeline(self, tensor, *, local_group, inter_group, chunk_size):
+        called["count"] += 1
+        called["chunk_size"] = chunk_size
+        tensor.add_(1.0)
+
+    monkeypatch.setattr(
+        "bitscom.api.LowBitGroup._hierarchical_lowbit_allreduce_pipeline_a",
+        fake_pipeline,
+    )
+
+    group = LowBitGroup(bitwidth=4, process_group=object())
+    t = torch.tensor([0.0, 1.0], dtype=torch.float32)
+    local_group = object()
+    inter_group = object()
+
+    group.all_reduce(
+        t,
+        async_op=False,
+        local_group=local_group,
+        inter_group=inter_group,
+        chunk_size=32,
+    )
+
+    assert called["count"] == 1
+    assert called["chunk_size"] == 32
+    assert torch.allclose(t, torch.tensor([1.0, 2.0]))
