@@ -75,8 +75,12 @@ def quantize_tensor(
     x = tensor.detach().to(torch.float32).contiguous()
     max_abs = float(x.abs().max().item())
     if max_abs == 0.0:
+        # Use a unit scale for all-zero tensors so the downstream code can
+        # treat zero as a normal quantized value without special-casing.
         scale = 1.0
     else:
+        # Symmetric max-abs scaling keeps the implementation simple and makes
+        # the quantized range easy to reason about across CPU and CUDA paths.
         scale = max_abs / float(qmax)
 
     scaled = x / scale
@@ -120,9 +124,13 @@ def pack_lowbit(q_tensor: torch.Tensor, bitwidth: int) -> Tuple[torch.Tensor, in
     numel = int(values.numel())
 
     if q_tensor.is_cuda and _HAS_CUDA_KERNELS and bitwidth in (1, 2, 4, 8):
+        # The CUDA fast path only covers bitwidths that map cleanly to byte
+        # packing, which keeps the kernel interface compact.
         return pack_lowbit_cuda(q_tensor, bitwidth), numel
 
     if bitwidth in (1, 2, 4, 8):
+        # For these bitwidths, bit-shift packing is enough and keeps the Python
+        # fallback easy to audit.
         per_byte = 8 // bitwidth
         pad = (-numel) % per_byte
         if pad:
@@ -135,6 +143,8 @@ def pack_lowbit(q_tensor: torch.Tensor, bitwidth: int) -> Tuple[torch.Tensor, in
         return packed, numel
 
     if bitwidth == 12:
+        # 12-bit is handled separately because it does not align to byte
+        # boundaries and needs a custom 3-byte packing layout.
         pad = numel % 2
         if pad:
             values = torch.cat(
@@ -162,6 +172,8 @@ def unpack_lowbit(packed: torch.Tensor, bitwidth: int, numel: int) -> torch.Tens
     packed = packed.contiguous().view(-1)
 
     if packed.is_cuda and _HAS_CUDA_KERNELS and bitwidth in (1, 2, 4, 8):
+        # Match the CUDA packing path above so the encoded representation stays
+        # symmetric between CPU and GPU.
         return unpack_lowbit_cuda(packed, bitwidth, numel)
 
     if bitwidth in (1, 2, 4, 8):

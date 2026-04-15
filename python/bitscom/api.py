@@ -98,6 +98,8 @@ class LowBitGroup:
             and self.bitwidth < 8
             and op == dist.ReduceOp.SUM
         ):
+            # Single-node topology: keep local communication dense and avoid
+            # introducing packing/unpacking overhead where bandwidth is not the bottleneck.
             if local_quantize:
                 flat = tensor.contiguous().view(-1)
                 reduced = self._lowbit_allreduce_via_alltoall_group(flat, local_group).view_as(tensor)
@@ -296,10 +298,14 @@ class LowBitGroup:
         def _local_phase(idx: int) -> None:
             chunk = chunks[idx]
             if not local_quantize:
+                # In the default mode, local collectives stay full precision and
+                # only the inter-node stage is compressed.
                 # Local communication is high-bandwidth: keep it full precision.
                 dist.reduce(chunk, dst=local_leader_global, group=local_group, op=dist.ReduceOp.SUM)
                 return
 
+            # Compatibility mode: quantize the local stage as well, which
+            # preserves the original all-lowbit pipeline behavior.
             q_local, local_scale = quantize_tensor(
                 chunk,
                 self.bitwidth,
@@ -332,6 +338,8 @@ class LowBitGroup:
         def _inter_phase(idx: int) -> None:
             chunk = chunks[idx]
             if is_local_leader:
+                # The inter stage always uses the low-bit all-reduce path because
+                # this is where bandwidth pressure is highest in multi-node runs.
                 inter_in = inter_results[idx] if local_quantize else chunk.to(dtype=torch.float32)
                 inter_results[idx] = self._lowbit_allreduce_via_alltoall_group(inter_in, inter_group)
             else:
