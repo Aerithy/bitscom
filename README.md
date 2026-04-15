@@ -29,9 +29,13 @@ Current architecture:
 - `LowBitGroup.compress()` and `LowBitGroup.decompress()` helper APIs
 - Optional simulation mode (`simulate_quantization=True`) for validating quantization effect before collectives
 - Python low-bit all-reduce pipeline for `<8bit` (`all-to-all -> local reduce -> all-gather`)
+- Hierarchical pipeline-A low-bit all-reduce (`local reduce -> inter lowbit all-reduce -> local broadcast`)
+- Multi-node CUDA dual-stream scheduling for pipeline-A (`warmup -> steady -> cooldown`)
+- Single-node local-group-only fast path: one-shot full-precision all-reduce without chunked pipeline
 - Error-feedback in first-stage quantization for C++ backend low-bit allreduce path
 - Explicit backend option registration: `bitwidth` and `error_feedback`
 - Robust backend registration with explicit error when C++ extension is missing
+- Build-time `compile_commands.json` emission for clangd
 
 ## Gaps That Still Remain
 
@@ -40,6 +44,44 @@ The following items are still pending and marked as future work:
 - In-backend low-bit paths for `allgather` and `reduce_scatter` (currently forwarded to NCCL)
 - End-to-end multi-node benchmark suite and scaling analysis
 - Stronger C++/Python path unification to reduce duplicated quantization logic
+
+## Environment Setup (Before Build)
+
+The extension build depends on a working Python + PyTorch + CUDA toolchain.
+
+1. Create and activate a clean conda env:
+
+```bash
+conda create -n bitscom python=3.12 -y
+conda activate bitscom
+```
+
+2. Install base build tools:
+
+```bash
+python -m pip install --upgrade pip setuptools wheel
+```
+
+3. Install PyTorch with CUDA support (example: CUDA 13.0 wheels):
+
+```bash
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+```
+
+4. Optional: if CUDA/NCCL are not in default locations, export paths:
+
+```bash
+export CUDA_HOME=/usr/local/cuda
+export NCCL_INCLUDE_DIR=/path/to/nccl/include
+export NCCL_LIB_DIR=/path/to/nccl/lib
+```
+
+5. Quick sanity checks before building:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.version.cuda)"
+nvcc --version
+```
 
 ## Build
 
@@ -55,6 +97,8 @@ If using the tested conda environment in this repo:
 /home/aerith/miniforge3/envs/bitscom/bin/python -m pip install -e . --no-build-isolation
 ```
 
+The extension build now emits `compile_commands.json` at repo root for clangd.
+
 ## Test
 
 Unit tests and non-distributed integration-safe tests:
@@ -67,6 +111,18 @@ Quantization-focused tests (including CUDA path and stochastic rounding checks):
 
 ```bash
 /home/aerith/miniforge3/envs/bitscom/bin/python -m pytest -q tests/test_quantization.py
+```
+
+Pipeline-A API behavior tests:
+
+```bash
+/home/aerith/miniforge3/envs/bitscom/bin/python -m pytest -q tests/test_api.py
+```
+
+Distributed correctness test for pipeline-A (NCCL, 2+ GPUs):
+
+```bash
+BITSCOM_RUN_DIST=1 /home/aerith/miniforge3/envs/bitscom/bin/python -m pytest -q tests/test_pipeline_a_correctness.py
 ```
 
 Run integration/e2e with distributed launcher:
@@ -167,6 +223,24 @@ Notes:
 
 - `error_feedback=True` currently applies to first-stage quantization in low-bit allreduce.
 - Re-registering backend with different options in the same process raises an error by design.
+
+## Hierarchical All-Reduce Options
+
+When using hierarchical pipeline-A in Python (`local_group` + `inter_group`),
+you can control whether local-group communication is quantized:
+
+```python
+group.all_reduce(
+	tensor,
+	local_group=local_group,
+	inter_group=inter_group,
+	chunk_size=1 << 20,
+	local_quantize=False,  # default: local full precision, inter lowbit
+)
+```
+
+Set `local_quantize=True` to keep the original behavior where local-group and
+inter-group stages are both quantized.
 
 ## Project Layout
 

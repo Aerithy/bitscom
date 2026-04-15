@@ -84,6 +84,7 @@ class LowBitGroup:
         local_group: Optional[dist.ProcessGroup] = None,
         inter_group: Optional[dist.ProcessGroup] = None,
         chunk_size: Optional[int] = None,
+        local_quantize: bool = False,
     ):
         """
         低比特 all_reduce。
@@ -91,12 +92,31 @@ class LowBitGroup:
         当使用 lowbit backend 时，底层 C++ 会自动进行
         pack -> NCCL allreduce -> unpack 的流程。
         """
+        if (
+            local_group is not None
+            and inter_group is None
+            and self.bitwidth < 8
+            and op == dist.ReduceOp.SUM
+        ):
+            if local_quantize:
+                flat = tensor.contiguous().view(-1)
+                reduced = self._lowbit_allreduce_via_alltoall_group(flat, local_group).view_as(tensor)
+                tensor.copy_(reduced.to(dtype=tensor.dtype))
+            else:
+                # Single-node topology: local collective does not need compression.
+                dist.all_reduce(tensor, op=op, group=local_group)
+            if async_op:
+                return _ImmediateWork()
+            return None
+
         if self._should_use_pipeline_a(op, local_group, inter_group):
+
             self._hierarchical_lowbit_allreduce_pipeline_a(
                 tensor,
                 local_group=local_group,
                 inter_group=inter_group,
                 chunk_size=chunk_size,
+                local_quantize=local_quantize,
             )
             if async_op:
                 return _ImmediateWork()
@@ -143,6 +163,16 @@ class LowBitGroup:
         for start in range(0, flat.numel(), chunk_size):
             chunks.append(flat[start : start + chunk_size])
         return chunks
+
+    def _should_use_dual_stream_pipeline(
+        self,
+        *,
+        is_cuda: bool,
+        local_size: int,
+        global_size: int,
+    ) -> bool:
+        # Only use dual-stream overlap when inter-node communication exists.
+        return is_cuda and local_size < global_size
 
     def _lowbit_allreduce_via_alltoall_group(
         self,
@@ -231,6 +261,7 @@ class LowBitGroup:
         local_group: dist.ProcessGroup,
         inter_group: dist.ProcessGroup,
         chunk_size: Optional[int],
+        local_quantize: bool,
     ) -> None:
         flat = tensor.contiguous().view(-1)
         if flat.numel() == 0:
@@ -243,6 +274,7 @@ class LowBitGroup:
         global_rank = dist.get_rank(self.pg)
         local_rank = dist.get_rank(local_group)
         local_size = dist.get_world_size(local_group)
+        global_size = dist.get_world_size(self.pg)
         is_local_leader = local_rank == 0
 
         rank_tensor = torch.tensor(
@@ -256,12 +288,18 @@ class LowBitGroup:
 
         numels = [0] * num_chunks
         packed_templates = [None] * num_chunks
-        local_sums = [None] * num_chunks
+        inter_results = [None] * num_chunks
+        bcast_buffers = [None] * num_chunks
         packed_bcasts = [None] * num_chunks
         bcast_scale_tensors = [None] * num_chunks
 
         def _local_phase(idx: int) -> None:
             chunk = chunks[idx]
+            if not local_quantize:
+                # Local communication is high-bandwidth: keep it full precision.
+                dist.reduce(chunk, dst=local_leader_global, group=local_group, op=dist.ReduceOp.SUM)
+                return
+
             q_local, local_scale = quantize_tensor(
                 chunk,
                 self.bitwidth,
@@ -289,14 +327,31 @@ class LowBitGroup:
                         device=chunk.device,
                     )
                     local_sum.add_(fp_part)
-                local_sums[idx] = local_sum
+                inter_results[idx] = local_sum
 
         def _inter_phase(idx: int) -> None:
             chunk = chunks[idx]
             if is_local_leader:
-                inter_out = self._lowbit_allreduce_via_alltoall_group(local_sums[idx], inter_group)
+                inter_in = inter_results[idx] if local_quantize else chunk.to(dtype=torch.float32)
+                inter_results[idx] = self._lowbit_allreduce_via_alltoall_group(inter_in, inter_group)
+            else:
+                inter_results[idx] = None
+
+        def _finalize_phase(idx: int) -> None:
+            chunk = chunks[idx]
+            if not local_quantize:
+                if is_local_leader:
+                    bcast_buffers[idx] = inter_results[idx].to(dtype=chunk.dtype)
+                else:
+                    bcast_buffers[idx] = torch.empty_like(chunk)
+
+                dist.broadcast(bcast_buffers[idx], src=local_leader_global, group=local_group)
+                chunk.copy_(bcast_buffers[idx])
+                return
+
+            if is_local_leader:
                 q_bcast, bcast_scale = quantize_tensor(
-                    inter_out,
+                    inter_results[idx],
                     self.bitwidth,
                     stochastic_rounding=self.stochastic_rounding,
                 )
@@ -311,23 +366,23 @@ class LowBitGroup:
                 packed_bcasts[idx] = torch.empty_like(packed_templates[idx])
                 bcast_scale_tensors[idx] = torch.empty(1, dtype=torch.float32, device=chunk.device)
 
-        def _finalize_phase(idx: int) -> None:
-            chunk = chunks[idx]
-            packed_bcast = packed_bcasts[idx]
-            bcast_scale_tensor = bcast_scale_tensors[idx]
-            dist.broadcast(packed_bcast, src=local_leader_global, group=local_group)
-            dist.broadcast(bcast_scale_tensor, src=local_leader_global, group=local_group)
+            dist.broadcast(packed_bcasts[idx], src=local_leader_global, group=local_group)
+            dist.broadcast(bcast_scale_tensors[idx], src=local_leader_global, group=local_group)
 
-            q_recv = unpack_lowbit(packed_bcast, self.bitwidth, numels[idx])
+            q_recv = unpack_lowbit(packed_bcasts[idx], self.bitwidth, numels[idx])
             fp_recv = dequantize_tensor(
                 q_recv,
-                float(bcast_scale_tensor.item()),
+                float(bcast_scale_tensors[idx].item()),
                 dtype=torch.float32,
                 device=chunk.device,
             )
             chunk.copy_(fp_recv.to(dtype=chunk.dtype))
 
-        if not flat.is_cuda:
+        if not self._should_use_dual_stream_pipeline(
+            is_cuda=flat.is_cuda,
+            local_size=local_size,
+            global_size=global_size,
+        ):
             for idx in range(num_chunks):
                 _local_phase(idx)
                 _inter_phase(idx)

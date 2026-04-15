@@ -29,9 +29,13 @@ bitscom 是一个面向 PyTorch 的低比特分布式通信库。
 - `LowBitGroup.compress()` 与 `LowBitGroup.decompress()` 辅助接口
 - 可选模拟模式（`simulate_quantization=True`），用于在通信前验证量化影响
 - `<8bit` 的 Python 低比特 all-reduce 管线（`all-to-all -> local reduce -> all-gather`）
+- 分层方案 A 低比特 all-reduce（`local reduce -> inter lowbit all-reduce -> local broadcast`）
+- 多机 CUDA 双流流水调度（`warmup -> steady -> cooldown`）
+- 单机仅 `local_group` 快速路径：一次全精度 all-reduce，不走分块流水
 - C++ 后端低比特 allreduce 路径第一段量化的 error-feedback
 - 显式后端注册参数：`bitwidth` 与 `error_feedback`
 - C++ 扩展缺失时的稳健注册报错
+- 构建时自动生成 `compile_commands.json`（用于 clangd）
 
 ## 仍待完善
 
@@ -40,6 +44,44 @@ bitscom 是一个面向 PyTorch 的低比特分布式通信库。
 - C++ 后端中 `allgather` 与 `reduce_scatter` 的低比特实现（当前仍透传到 NCCL）
 - 多机端到端 benchmark 与规模化分析
 - 进一步统一 C++/Python 量化路径以降低重复实现
+
+## 环境配置（编译前）
+
+扩展编译依赖可用的 Python + PyTorch + CUDA 工具链。
+
+1. 创建并激活独立 conda 环境：
+
+```bash
+conda create -n bitscom python=3.12 -y
+conda activate bitscom
+```
+
+2. 安装基础构建工具：
+
+```bash
+python -m pip install --upgrade pip setuptools wheel
+```
+
+3. 安装带 CUDA 支持的 PyTorch（示例：CUDA 13.0 wheel）：
+
+```bash
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu130
+```
+
+4. 可选：若 CUDA/NCCL 不在默认路径，显式导出环境变量：
+
+```bash
+export CUDA_HOME=/usr/local/cuda
+export NCCL_INCLUDE_DIR=/path/to/nccl/include
+export NCCL_LIB_DIR=/path/to/nccl/lib
+```
+
+5. 编译前快速自检：
+
+```bash
+python -c "import torch; print(torch.__version__, torch.version.cuda)"
+nvcc --version
+```
 
 ## 构建
 
@@ -55,6 +97,8 @@ pip install -e .
 /home/aerith/miniforge3/envs/bitscom/bin/python -m pip install -e . --no-build-isolation
 ```
 
+当前扩展构建会在仓库根目录生成 `compile_commands.json`，便于 clangd 索引。
+
 ## 测试
 
 单测与非分布式集成安全测试：
@@ -67,6 +111,18 @@ pytest -q
 
 ```bash
 /home/aerith/miniforge3/envs/bitscom/bin/python -m pytest -q tests/test_quantization.py
+```
+
+Pipeline-A API 行为测试：
+
+```bash
+/home/aerith/miniforge3/envs/bitscom/bin/python -m pytest -q tests/test_api.py
+```
+
+Pipeline-A 分布式正确性测试（NCCL，至少 2 卡）：
+
+```bash
+BITSCOM_RUN_DIST=1 /home/aerith/miniforge3/envs/bitscom/bin/python -m pytest -q tests/test_pipeline_a_correctness.py
 ```
 
 分布式 e2e（多进程）测试：
@@ -167,6 +223,24 @@ bitscom.init(bitwidth=4, error_feedback=True)
 
 - `error_feedback=True` 当前仅作用于低比特 allreduce 第一段量化。
 - 同一进程内若以不同参数重复注册，会按设计抛出错误。
+
+## 分层 All-Reduce 参数
+
+在 Python 侧使用分层方案 A（传入 `local_group` + `inter_group`）时，
+可通过参数控制 local-group 是否量化：
+
+```python
+group.all_reduce(
+	tensor,
+	local_group=local_group,
+	inter_group=inter_group,
+	chunk_size=1 << 20,
+	local_quantize=False,  # 默认：local 全精度，inter 低比特
+)
+```
+
+当 `local_quantize=True` 时，会保留原始行为：local-group 与 inter-group
+阶段都走量化通信。
 
 ## 目录结构
 

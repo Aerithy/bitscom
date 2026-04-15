@@ -167,11 +167,12 @@ def test_lowbit_allreduce_requires_divisible_numel(fake_dist, monkeypatch):
 def test_all_reduce_uses_pipeline_a_when_local_and_inter_groups_passed(fake_dist, monkeypatch):
     monkeypatch.setattr("bitscom.api.dist.get_world_size", lambda group: 2)
 
-    called = {"count": 0, "chunk_size": None}
+    called = {"count": 0, "chunk_size": None, "local_quantize": None}
 
-    def fake_pipeline(self, tensor, *, local_group, inter_group, chunk_size):
+    def fake_pipeline(self, tensor, *, local_group, inter_group, chunk_size, local_quantize):
         called["count"] += 1
         called["chunk_size"] = chunk_size
+        called["local_quantize"] = local_quantize
         tensor.add_(1.0)
 
     monkeypatch.setattr(
@@ -194,4 +195,103 @@ def test_all_reduce_uses_pipeline_a_when_local_and_inter_groups_passed(fake_dist
 
     assert called["count"] == 1
     assert called["chunk_size"] == 32
+    assert called["local_quantize"] is False
     assert torch.allclose(t, torch.tensor([1.0, 2.0]))
+
+
+def test_all_reduce_local_group_only_uses_full_precision_allreduce(fake_dist, monkeypatch):
+    monkeypatch.setattr("bitscom.api.dist.get_world_size", lambda group: 2)
+
+    called = {"local_allreduce": 0, "pipeline": 0}
+
+    def fake_local_allreduce(self, flat, group):
+        called["local_allreduce"] += 1
+        return flat + 2.0
+
+    def fake_pipeline(self, tensor, *, local_group, inter_group, chunk_size, local_quantize):
+        called["pipeline"] += 1
+        tensor.add_(999.0)
+
+    monkeypatch.setattr(
+        "bitscom.api.LowBitGroup._lowbit_allreduce_via_alltoall_group",
+        fake_local_allreduce,
+    )
+
+    monkeypatch.setattr(
+        "bitscom.api.LowBitGroup._hierarchical_lowbit_allreduce_pipeline_a",
+        fake_pipeline,
+    )
+
+    group = LowBitGroup(bitwidth=4, process_group=object())
+    t = torch.tensor([0.0, 1.0], dtype=torch.float32)
+    local_group = object()
+
+    group.all_reduce(
+        t,
+        async_op=False,
+        local_group=local_group,
+        inter_group=None,
+        chunk_size=16,
+    )
+
+    assert called["local_allreduce"] == 0
+    assert called["pipeline"] == 0
+    assert "all_reduce" in fake_dist.calls
+    assert fake_dist.calls["all_reduce"]["kwargs"]["group"] is local_group
+
+
+def test_all_reduce_local_group_only_quantized_path(fake_dist, monkeypatch):
+    monkeypatch.setattr("bitscom.api.dist.get_world_size", lambda group: 2)
+
+    called = {"local_allreduce": 0, "pipeline": 0}
+
+    def fake_local_allreduce(self, flat, group):
+        called["local_allreduce"] += 1
+        return flat + 2.0
+
+    def fake_pipeline(self, tensor, *, local_group, inter_group, chunk_size, local_quantize):
+        called["pipeline"] += 1
+
+    monkeypatch.setattr(
+        "bitscom.api.LowBitGroup._lowbit_allreduce_via_alltoall_group",
+        fake_local_allreduce,
+    )
+    monkeypatch.setattr(
+        "bitscom.api.LowBitGroup._hierarchical_lowbit_allreduce_pipeline_a",
+        fake_pipeline,
+    )
+
+    group = LowBitGroup(bitwidth=4, process_group=object())
+    t = torch.tensor([0.0, 1.0], dtype=torch.float32)
+    local_group = object()
+
+    group.all_reduce(
+        t,
+        async_op=False,
+        local_group=local_group,
+        inter_group=None,
+        chunk_size=16,
+        local_quantize=True,
+    )
+
+    assert called["local_allreduce"] == 1
+    assert called["pipeline"] == 0
+    assert torch.allclose(t, torch.tensor([2.0, 3.0]))
+
+
+def test_dual_stream_guard_single_node_uses_single_stream(fake_dist):
+    group = LowBitGroup(bitwidth=4, process_group=object())
+    assert group._should_use_dual_stream_pipeline(
+        is_cuda=True,
+        local_size=8,
+        global_size=8,
+    ) is False
+
+
+def test_dual_stream_guard_multi_node_uses_dual_stream(fake_dist):
+    group = LowBitGroup(bitwidth=4, process_group=object())
+    assert group._should_use_dual_stream_pipeline(
+        is_cuda=True,
+        local_size=4,
+        global_size=8,
+    ) is True
