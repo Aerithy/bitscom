@@ -1,5 +1,5 @@
 // cpp/src/process_group_lowbit.cc
-#include "cpp/include/process_group_lowbit.h"
+#include "process_group_lowbit.h"
 
 #include <ATen/ATen.h>
 

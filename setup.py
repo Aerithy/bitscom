@@ -20,12 +20,18 @@ import torch
 from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension
 
 
+_PROJECT_ROOT = os.path.abspath(os.path.dirname(__file__))
+
+
 def _existing(path):
     return os.path.isdir(path)
 
 
 def _collect_include_dirs():
-    include_dirs = ["./"]
+    include_dirs = [
+        _PROJECT_ROOT,
+        os.path.join(_PROJECT_ROOT, "cpp", "include"),
+    ]
 
     env_include = os.environ.get("NCCL_INCLUDE_DIR")
     if env_include:

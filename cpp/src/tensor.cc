@@ -1,7 +1,7 @@
 // cpp/src/tensor.cc
 #include <cstdlib>
 #include <cassert>
-#include "cpp/include/tensor.h"
+#include "tensor.h"
 // #include "cuda/include/kernels.cuh"
 // #include <cuda_runtime.h>
 

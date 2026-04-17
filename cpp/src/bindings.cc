@@ -9,7 +9,7 @@
 #include <torch/csrc/distributed/c10d/Backend.hpp>
 #include <torch/extension.h>
 
-#include "cpp/include/process_group_lowbit.h"
+#include "process_group_lowbit.h"
 
 namespace py = pybind11;
 
